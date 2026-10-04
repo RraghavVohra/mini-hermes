@@ -17,3 +17,30 @@ Every non-obvious decision, with the "why," recorded as it's made.
 - **Why:** Each piece depends on the one before it structurally (Skills need a Loop to execute them; Nudge needs Skills to exist before it's meaningful; Memory is lowest-priority this round since it was already explored deeply in Billie).
 - **Decision:** Process discipline per component — Theory (research-backed) → Architecture discussion → Product + Cost lens → Code (isolated, story-commented, tested) → this file updated.
 - **Why:** Billie's postmortem identified "no vision before code" and "no cost discipline" as the two structural failures. This sequence bakes both in from day one instead of bolting them on after the fact.
+
+
+## 2026-10-04 — Core Agent Loop: Theory + Architecture locked
+
+### Theory studied
+- **Agent = a loop that calls an LLM repeatedly until the task is done.** Not magic — a chatbot does one round-trip (message → response), an agent does multiple round-trips (message → tool call → tool execution → result → maybe another tool call → ... → final text).
+- **OpenAI's 5-step tool-calling flow** (verified from official docs, developers.openai.com/api/docs/guides/function-calling):
+  1. Request to model with available tools listed.
+  2. Model returns a tool call (name + arguments) instead of text, if it decides a tool is needed.
+  3. **Our code** executes the tool — the LLM never executes anything itself.
+  4. We send the tool's result back to the model as a `tool`-role message.
+  5. Model gives a final text response, OR makes another tool call (loop continues).
+- **Four core concepts inside the loop:**
+  - **Message history** — a list of `{role, content}` messages (system/user/assistant/tool) that IS the agent's working memory for a task. No hidden state — we send the full list every API call.
+  - **Tool schema** — JSON Schema definitions describing each tool's name, description, and parameters, shown to the model (not the actual function). `strict: true` guarantees valid JSON arguments.
+  - **Tool dispatch** — our own code maps a tool name to a real function, executes it, and formats the result back into the message list. This is where validation/safety checks belong.
+  - **Stop condition** — loop ends when the model returns text with no tool calls, OR a max-iteration cap is hit, OR an unrecoverable error occurs.
+- **Loops vs. DAGs:** loops suit open-ended tasks where the model decides the next step; DAGs suit fixed, predictable pipelines (e.g. Billie's safety pipeline: Gate 1 → Gate 1b → Gate 2 → response was a DAG, not a loop). Mini-Hermes's Core Agent Loop is a loop by nature — V1 does not need a DAG.
+- **AI engineering's real scope** (beyond "call the LLM"): orchestration (loop/DAG/hybrid), context + memory management, reliability + error recovery, evaluation + prompt ops, and **cost engineering** — auditing every call's necessity and model choice.
+
+### Architecture decisions
+1. **API: Chat Completions, not Responses API.** Responses API (launched March 2025) manages state server-side, hiding exactly the internals we want to learn (message history, round-trips). Chat Completions keeps everything in our own code and matches the industry-standard format (OpenAI/Anthropic/Google all similar).
+2. **Primary model: `gpt-4.1-mini`** ($0.40/M input, $1.60/M output tokens, 1M context). ~6x cheaper than `gpt-4o` ($2.50/$10.00), stronger tool-calling than `gpt-4.1-nano` ($0.10/$0.40) which can be inconsistent on tool-call decisions. Monthly budget cap: ₹50. Lightweight/classification-style calls may use `gpt-4.1-nano` later — per-stage model selection, not one-size-fits-all (direct fix for Billie's reflex-model-choice mistake).
+3. **File structure (flat, V1):** `config.py` (central config — model names, paths, constants), `agent_loop.py` (the core loop), `tools/registry.py` (tool-name → function + schema mapping), `tools/` (individual tool implementations), `tests/` (isolated per-component tests), `skills/` (empty for now, populated in Step 3).
+4. **Loop design:** while loop, max 15 iterations (configurable). Three stop conditions — (a) model returns text with no tool calls → normal exit, (b) max iterations hit → error + log, (c) tool execution error → error string returned to the model as a tool result, model decides next action (loop does NOT break on tool errors — this keeps the agent resilient rather than brittle).
+5. **Tool registration: central registry pattern.** `TOOL_REGISTRY` dict maps tool name → `{function, schema}`. Adding a new tool means one new file + one registry entry, nothing else touched. Skills (Step 3) will plug into this same registry.
+6. **Error handling philosophy:** API-level errors (network, rate limit) → retry with exponential backoff (3 attempts) then graceful exit. Tool-level errors → error string back to the model, loop continues. Unexpected errors → full traceback logged, safe message returned, no crash.
