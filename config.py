@@ -49,3 +49,15 @@ MAX_ITERATIONS = 15
 # spend limit/alert on the OpenAI dashboard. If real spend crosses it,
 # we investigate before spending more.
 MONTHLY_BUDGET_INR = 300
+
+# --- Reasoning ---
+# Reasoning tokens are billed as output tokens, so effort is a cost lever.
+# Start at "low" (suited to tool use and multi-step decisions); raise to
+# "medium" only if our own evals show a clear quality gain.
+REASONING_EFFORT = "low"
+
+# Hard cap on tokens generated per call (reasoning + visible output).
+# If the cap is hit mid-reasoning we can pay for tokens and get no visible
+# answer, so it must leave room for thinking. Tune down once we see real
+# reasoning_tokens numbers in the usage object.
+MAX_OUTPUT_TOKENS = 25_000

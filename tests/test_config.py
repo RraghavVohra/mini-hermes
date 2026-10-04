@@ -31,3 +31,15 @@ def test_require_env_fails_closed_when_variable_is_missing(monkeypatch):
     monkeypatch.delenv("SOME_MADE_UP_KEY", raising=False)
     with pytest.raises(RuntimeError):
         config.require_env("SOME_MADE_UP_KEY")
+
+def test_reasoning_effort_is_a_value_luna_supports():
+    # Allowed values per the gpt-5.6-luna model page. A typo here would
+    # only show up as an API error mid-run, so we catch it early.
+    allowed = {"none", "low", "medium", "high", "xhigh", "max"}
+    assert config.REASONING_EFFORT in allowed
+
+
+def test_max_output_tokens_is_in_a_safe_range():
+    # Too low: reasoning eats the budget and we pay for no visible answer.
+    # Too high: one call can burn real money.
+    assert 1_000 <= config.MAX_OUTPUT_TOKENS <= 50_000

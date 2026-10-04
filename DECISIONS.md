@@ -74,3 +74,20 @@ Every non-obvious decision, with the "why," recorded as it's made.
 
 - **Superseded:** the earlier open item about comparing GPT-5 mini at cost-audit time. Replaced by the Luna decision above.
 - **Open item:** Decision 1 (Chat Completions vs Responses API) must be re-researched now that the model is a reasoning model. To be done before `agent_loop.py` design.
+
+## 2026-10-04: API choice revised (supersedes Decision 1 of the Core Agent Loop entry)
+
+- **Decision:** Use the Responses API (`client.responses.create`) instead of Chat Completions.
+- **Why:** The original reason for Chat Completions was transparency and learning value, chosen when the model was `gpt-4.1-mini`. With `gpt-5.6-luna` (a reasoning model), OpenAI's reasoning guide says reasoning models work better with Responses (better intelligence and tool usage), and Chat Completions remains supported but is not the recommended path. Luna's official model page confirms function calling and Responses support.
+- **Impact on the loop:** The conversation is a list of items (message, function_call, function_call_output, reasoning), not just messages. A `function_call` item in the output means keep looping; none means final answer. A fourth stop condition is added: a response with status `incomplete` (hit `max_output_tokens`) is handled explicitly.
+
+- **Decision:** Manual history replay with `store=False`. We own the history list and replay every output item (including reasoning items) into the next call.
+- **Why:** Docs say reasoning items from the last function call must be passed back so the model keeps its thread. Owning the list keeps the loop transparent for learning, and nothing is stored server-side. Alternative considered: `previous_response_id` (simpler, but state lives on OpenAI's side).
+- **Bonus:** Reasoning is reusable across `gpt-5.6-sol`, `terra` and `luna`, so per-stage model switching later will not break history.
+
+- **Decision:** `REASONING_EFFORT = "low"` and `MAX_OUTPUT_TOKENS = 25_000` live in `config.py`.
+- **Why:** Reasoning tokens bill as output, so effort is a cost lever. Docs suggest `low` for tool use and multi-step decisions. Raise to `medium` only if our own evals show a clear gain. The output cap leaves room for reasoning, because hitting the cap mid-reasoning can cost money with no visible answer. Worst case at 25,000 tokens is about $0.03 per call on Luna. Tune down once real `reasoning_tokens` numbers show up in `usage`.
+
+- **Closed:** price verification. Luna's rates ($0.20 input, $0.02 cached input, $1.20 output) match OpenAI's official model page.
+- **Closed:** the Decision 1 re-research open item.
+
