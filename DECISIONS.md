@@ -44,3 +44,20 @@ Every non-obvious decision, with the "why," recorded as it's made.
 4. **Loop design:** while loop, max 15 iterations (configurable). Three stop conditions — (a) model returns text with no tool calls → normal exit, (b) max iterations hit → error + log, (c) tool execution error → error string returned to the model as a tool result, model decides next action (loop does NOT break on tool errors — this keeps the agent resilient rather than brittle).
 5. **Tool registration: central registry pattern.** `TOOL_REGISTRY` dict maps tool name → `{function, schema}`. Adding a new tool means one new file + one registry entry, nothing else touched. Skills (Step 3) will plug into this same registry.
 6. **Error handling philosophy:** API-level errors (network, rate limit) → retry with exponential backoff (3 attempts) then graceful exit. Tool-level errors → error string back to the model, loop continues. Unexpected errors → full traceback logged, safe message returned, no crash.
+
+## 2026-10-04: config.py (Core Agent Loop, piece 1)
+
+- **Decision:** `load_dotenv()` with default behavior (`override=False`).
+- **Why:** Standard convention, and it will work with CI/CD secrets later. Gotcha to remember: if a key is set in the system environment AND in `.env`, the system value wins. First debugging step for any key confusion is to check the system variable.
+
+- **Decision:** `require_env()` crashes at import time if `OPENAI_API_KEY` is missing.
+- **Why:** Fail-closed principle. A missing secret should stop the program at startup with a clear message, not surface mid-loop where it is hard to debug. Trade-off: nothing can import `config` without a key, which is fine because every V1 component needs it.
+
+- **Decision:** All constants (`MODEL_NAME`, `MAX_ITERATIONS`, `MONTHLY_BUDGET_INR`, paths) live only in `config.py`.
+- **Why:** Billie lesson. Cost audits and model swaps become one-file jobs. Budget cap is documented but not enforced yet.
+
+- **Decision:** Config tests check for mistakes (safe range for `MAX_ITERATIONS`, fail-closed behavior, paths), not copies of values.
+- **Why:** A test pinned to `"gpt-4.1-mini"` would fail on every intentional model change and teach us nothing.
+
+- **Open item (cost audit):** OpenAI's model page recommends GPT-5 mini for complex tasks, with a lower input price than `gpt-4.1-mini` ($0.25 vs $0.40 per 1M tokens). Output price not verified yet. Compare at cost-audit time; switching is a one-line change in `config.py`.
+
