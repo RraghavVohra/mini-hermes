@@ -61,3 +61,16 @@ Every non-obvious decision, with the "why," recorded as it's made.
 
 - **Open item (cost audit):** OpenAI's model page recommends GPT-5 mini for complex tasks, with a lower input price than `gpt-4.1-mini` ($0.25 vs $0.40 per 1M tokens). Output price not verified yet. Compare at cost-audit time; switching is a one-line change in `config.py`.
 
+## 2026-10-04: Model and budget revised (supersedes Decision 2 of the Core Agent Loop entry)
+
+- **Decision:** Dev default model is `gpt-5.6-luna` (replaces `gpt-4.1-mini`).
+- **Why:** `gpt-4.1-mini` is an April 2025 model; the GPT-5.6 family (Sol / Terra / Luna) is current. Luna gives the best quality per rupee for agent work: roughly 10x cheaper than Terra, while one third-party agentic index puts it close to Terra. Model ID confirmed available on our key via `models.retrieve`.
+- **Pricing used (per 1M tokens):** Luna $0.20 input, $0.02 cached input, $1.20 output. Source is a third-party tracker (benchlm.ai), not OpenAI's live page, so confirm against the OpenAI dashboard once real spend shows up.
+- **Note:** These are reasoning models, so reasoning tokens bill as output. Real cost can exceed table-based estimates.
+- **Per-stage upgrade path:** Heavier stages (e.g. skill creation) can move to Terra or Sol later. Switching is a one-line change in `config.py`.
+
+- **Decision:** `MONTHLY_BUDGET_INR` raised from 50 to 300.
+- **Why:** Rough estimate is under Re 1 per typical task on Luna, so Rs 50 allows only ~55-60 tasks, too tight for 6 components with repeated test/debug runs. Estimate ignores history growth across loop iterations, so real numbers are needed. The cap is documented in `config.py`, not enforced in code. The real guard is a spend limit/alert on the OpenAI dashboard.
+
+- **Superseded:** the earlier open item about comparing GPT-5 mini at cost-audit time. Replaced by the Luna decision above.
+- **Open item:** Decision 1 (Chat Completions vs Responses API) must be re-researched now that the model is a reasoning model. To be done before `agent_loop.py` design.

@@ -34,9 +34,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
 # --- Model ---
-# One place to change the model. Per-stage models (e.g. a cheaper one
-# for tiny yes/no calls) can be added here later.
-MODEL_NAME = "gpt-4.1-mini"
+# Dev default: gpt-5.6-luna, chosen for best quality per rupee on agent
+# tasks. Heavier stages (e.g. skill creation) can get a stronger model
+# later; that is why the model lives here, in one place.
+MODEL_NAME = "gpt-5.6-luna"
 
 # --- Loop limits ---
 # Stop condition #2 of the agent loop: a safety net against runaway
@@ -44,6 +45,7 @@ MODEL_NAME = "gpt-4.1-mini"
 MAX_ITERATIONS = 15
 
 # --- Budget ---
-# Not enforced yet. This documents the cap; if real spend crosses it,
+# Not enforced in code yet. This documents the cap; the real guard is a
+# spend limit/alert on the OpenAI dashboard. If real spend crosses it,
 # we investigate before spending more.
-MONTHLY_BUDGET_INR = 50
+MONTHLY_BUDGET_INR = 300
