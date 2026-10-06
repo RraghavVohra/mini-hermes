@@ -91,3 +91,25 @@ Every non-obvious decision, with the "why," recorded as it's made.
 - **Closed:** price verification. Luna's rates ($0.20 input, $0.02 cached input, $1.20 output) match OpenAI's official model page.
 - **Closed:** the Decision 1 re-research open item.
 
+## 2026-10-06: Core Agent Loop built (agent_loop.py, pieces 2-3)
+
+- **Decision:** `run_agent` uses a bounded `for` loop (range of `max_iterations`) instead of a `while` loop.
+- **Why:** Same behavior as the planned while-loop, but a bug cannot become an infinite, billed loop. Supersedes the "while-loop" wording of Decision 4.
+
+- **Decision:** `client` is passed into `run_agent` instead of being created inside it.
+- **Why:** Tests hand in a scripted FakeClient, so the full loop is tested with zero API calls and zero cost.
+
+- **Decision:** `run_tool_call` never raises. Any failure (unknown tool, invalid JSON, tool exception, wrong argument names) returns an `"Error: ..."` function_call_output for the same `call_id`.
+- **Why:** Fail-resilient principle. The model sees the error and can retry. Every `call_id` must receive an output.
+
+- **Decision:** Tool output is capped at `MAX_TOOL_OUTPUT_CHARS` (10,000, about 2,500 tokens), set in `config.py`.
+- **Why:** Tool results are replayed in history on every later iteration, so a big result is re-billed again and again.
+
+- **Decision:** Every item in `response.output` is replayed into history through `to_input_item` (`model_dump(by_alias=True, exclude_none=True)`).
+- **Why:** Plain `model_dump()` emitted unset fields as None, including `async_`, and the API rejected it with 400 "Unknown parameter: input[1].async_". Found by the first real run (Experiment 02), invisible to mock tests. SDK version at the time: openai 3.24.0. The `by_alias` part is not yet tested against a field that has a real value, `exclude_none` is the proven fix.
+
+- **Lesson:** Mock tests prove our logic; a real API run proves the API contract. Every component that talks to the API needs both. Keep experiments/ runs as the integration check.
+
+- **Verified (Experiment 02):** a real two-step dependent tool chain on `gpt-5.6-luna` completed in 3 iterations, answer 782, with a reasoning item replayed correctly.
+
+- **Open items:** cost tracking (piece 4) and a budget-based stop. History grows every iteration; OpenAI docs list a Compaction feature for that, not yet researched. Revisit only when history size becomes a real cost.

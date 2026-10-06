@@ -43,3 +43,8 @@ def test_max_output_tokens_is_in_a_safe_range():
     # Too low: reasoning eats the budget and we pay for no visible answer.
     # Too high: one call can burn real money.
     assert 1_000 <= config.MAX_OUTPUT_TOKENS <= 50_000
+
+def test_max_tool_output_chars_is_in_a_safe_range():
+    # Too low: tools become useless. Too high: one big result is re-billed
+    # on every loop iteration.
+    assert 1_000 <= config.MAX_TOOL_OUTPUT_CHARS <= 100_000

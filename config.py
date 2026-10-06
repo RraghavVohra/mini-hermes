@@ -61,3 +61,8 @@ REASONING_EFFORT = "low"
 # answer, so it must leave room for thinking. Tune down once we see real
 # reasoning_tokens numbers in the usage object.
 MAX_OUTPUT_TOKENS = 25_000
+
+# --- Tool output ---
+# Tool results are replayed in history on EVERY loop iteration, so a huge
+# result gets re-billed again and again. Cap it. Roughly 2,500 tokens.
+MAX_TOOL_OUTPUT_CHARS = 10_000
