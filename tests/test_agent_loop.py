@@ -10,6 +10,7 @@ import pytest
 from openai.types.responses import ResponseFunctionToolCall
 
 import agent_loop
+import cost
 import config
 
 
@@ -128,8 +129,21 @@ def call_item(call_id="c1", name="multiply", arguments='{"a":17,"b":23}'):
     return FakeItem("function_call", name=name, call_id=call_id, arguments=arguments)
 
 
-def reply(items, status="completed", text=""):
-    return SimpleNamespace(status=status, output=items, output_text=text)
+def usage_of(input_tokens=100, output_tokens=50, cached=0, cache_write=0, reasoning=0):
+    return SimpleNamespace(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        input_tokens_details=SimpleNamespace(
+            cached_tokens=cached, cache_write_tokens=cache_write
+        ),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning),
+    )
+
+
+def reply(items, status="completed", text="", usage=None):
+    return SimpleNamespace(
+        status=status, output=items, output_text=text, usage=usage or usage_of()
+    )
 
 
 class FakeClient:
@@ -263,3 +277,47 @@ def test_to_input_item_keeps_the_fields_the_api_needs():
         "name": "multiply",
         "type": "function_call",
     }
+
+# --- cost tracking in the loop (piece 4b) ---
+
+def test_run_agent_sums_the_cost_of_every_call():
+    client = FakeClient([
+        reply([call_item()]),
+        reply([FakeItem("message")], text="391"),
+    ])
+    result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY)
+    one_call = cost.calculate_cost_usd(usage_of(), config.MODEL_NAME)
+    assert result.cost_usd == pytest.approx(2 * one_call)
+
+
+def test_run_agent_accumulates_token_totals():
+    client = FakeClient([
+        reply([call_item()]),
+        reply([FakeItem("message")], text="391"),
+    ])
+    result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY)
+    assert result.tokens == {
+        "input": 200, "cached": 0, "cache_write": 0, "output": 100, "reasoning": 0,
+    }
+
+
+def test_run_agent_stops_on_run_budget_before_running_tools():
+    client = FakeClient([reply([call_item()]), reply([FakeItem("message")], text="x")])
+    # 0.001 rupees is far below the cost of even one call.
+    result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY, max_cost_inr=0.001)
+    assert result.stop_reason == "run_budget"
+    assert len(client.requests) == 1  # it did not go round again
+    assert not any(i.get("type") == "function_call_output" for i in result.history)
+
+
+def test_run_agent_finished_answer_wins_over_the_budget():
+    client = FakeClient([reply([FakeItem("message")], text="done")])
+    result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY, max_cost_inr=0.001)
+    assert result.stop_reason == "completed"
+
+
+def test_run_agent_counts_the_cost_of_incomplete_responses():
+    client = FakeClient([reply([], status="incomplete")])
+    result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY)
+    assert result.stop_reason == "incomplete"
+    assert result.cost_usd > 0

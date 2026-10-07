@@ -66,3 +66,26 @@ MAX_OUTPUT_TOKENS = 25_000
 # Tool results are replayed in history on EVERY loop iteration, so a huge
 # result gets re-billed again and again. Cap it. Roughly 2,500 tokens.
 MAX_TOOL_OUTPUT_CHARS = 10_000
+
+# --- Pricing (USD per 1M tokens) ---
+# One entry per model we use. Source: the official gpt-5.6-luna model page.
+# Update this when OpenAI changes prices or when we switch models. A test
+# makes sure MODEL_NAME always has an entry here.
+PRICING_USD_PER_1M = {
+    "gpt-5.6-luna": {
+        "input": 0.20,
+        "cached_input": 0.02,
+        "output": 1.20,
+        # GPT-5.6 bills cache writes at 1.25x the normal input rate.
+        "cache_write_multiplier": 1.25,
+    },
+}
+
+# Approximate USD -> INR rate, used only to show rupees. MY ASSUMPTION, not
+# a verified live rate: edit this one number to today's rate.
+USD_TO_INR = 88.0
+
+# Per-run cost cap, the loop's cost brake. A normal run costs far less than
+# one rupee, so this only fires when something goes wrong (for example the
+# model keeps asking for tools while the history keeps growing).
+MAX_RUN_COST_INR = 15

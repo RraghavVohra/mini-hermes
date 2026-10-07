@@ -113,3 +113,21 @@ Every non-obvious decision, with the "why," recorded as it's made.
 - **Verified (Experiment 02):** a real two-step dependent tool chain on `gpt-5.6-luna` completed in 3 iterations, answer 782, with a reasoning item replayed correctly.
 
 - **Open items:** cost tracking (piece 4) and a budget-based stop. History grows every iteration; OpenAI docs list a Compaction feature for that, not yet researched. Revisit only when history size becomes a real cost.
+
+## 2026-10-07: Cost tracking added (Piece 4)
+
+- **Decision:** cost.py prices each token bucket separately: ordinary input, cached input (cache read), cache-write (1.25x input for GPT-5.6), and output. Reasoning tokens are NOT added on top of output — they are a subset.
+- **Why:** Official docs confirm input_tokens includes cached and cache_write tokens, and output_tokens includes reasoning tokens. Experiment 02 real run verified both: `total == input + output` and `reasoning <= output` were True on all 3 calls.
+
+- **Decision:** `run_agent` sums cost across all calls and returns it with the result. A per-run cost cap (`MAX_RUN_COST_INR = 15`) stops the loop before running more tools if the cap is crossed. A finished answer always wins over the cap.
+- **Why:** The loop replays growing history on every iteration, so a broken run can burn money. The cap fires only on actual anomalies; normal runs cost far less (Experiment 02: Rs 0.0143 for a 3-iteration chain).
+
+- **Observation (Experiment 02):** no prompt caching happened (cached=0, cache_write=0 on all calls). Input is too short to trigger it. Watch for caching effects when real tools produce longer history. Cache-write fee (1.25x) means a large prompt sent only once costs MORE with caching than without.
+
+- **Observation:** input tokens grew 72 → 120 → 152 across 3 iterations (history replay). Manageable now; revisit when tools produce large outputs. Compaction is in the backlog.
+
+- **Decision:** `PRICING_USD_PER_1M` in config.py is the single source of truth for per-model prices. A test verifies MODEL_NAME has an entry; another verifies every entry has all required fields.
+- **Why:** Switching models without adding pricing would silently break cost tracking (fail closed).
+
+- **Note:** `USD_TO_INR = 88.0` is an approximate rate, not a verified live rate. It affects only the rupee display, not the underlying USD math.
+

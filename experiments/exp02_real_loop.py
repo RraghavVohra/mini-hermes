@@ -9,9 +9,28 @@ tiny question that FORCES two dependent tool calls.
 from openai import OpenAI
 
 import config
+import cost
 from agent_loop import run_agent
 
-client = OpenAI(api_key=config.OPENAI_API_KEY)
+class RecordingClient:
+    """Wraps the real client and remembers every response's usage.
+
+    Story: run_agent only returns totals. To CHECK the docs' claims we need
+    each call's own usage, so this wrapper records them as they pass through.
+    """
+
+    def __init__(self, real_client):
+        self._real = real_client
+        self.responses = self  # so client.responses.create(...) works
+        self.usages = []
+
+    def create(self, **kwargs):
+        response = self._real.responses.create(**kwargs)
+        self.usages.append(response.usage)
+        return response
+
+
+client = RecordingClient(OpenAI(api_key=config.OPENAI_API_KEY))
 
 # Same flat tool definition as Experiment 01.
 TOOLS = [
@@ -64,3 +83,26 @@ for i, item in enumerate(result.history):
     elif kind == "function_call_output":
         detail = f"output = {item['output']}"
     print(f"  {i}: {kind} {detail}")
+
+
+# --- cost report (piece 4b) ---
+print("\ncost this run: $%.6f  (about Rs %.4f)" % (
+    result.cost_usd, cost.usd_to_inr(result.cost_usd)))
+print("token totals from the loop:", result.tokens)
+
+print("\nper-call usage (docs check):")
+for i, u in enumerate(client.usages, start=1):
+    d = u.input_tokens_details
+    r = u.output_tokens_details.reasoning_tokens
+    print(
+        f"  call {i}: input={u.input_tokens} cached={d.cached_tokens} "
+        f"cache_write={d.cache_write_tokens} output={u.output_tokens} "
+        f"reasoning={r} total={u.total_tokens}"
+    )
+    print("    total == input + output:", u.total_tokens == u.input_tokens + u.output_tokens)
+    print("    reasoning <= output:", r <= u.output_tokens)
+
+print(
+    "\nloop total input matches the recorded calls:",
+    result.tokens["input"] == sum(u.input_tokens for u in client.usages),
+)

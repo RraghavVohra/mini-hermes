@@ -48,3 +48,22 @@ def test_max_tool_output_chars_is_in_a_safe_range():
     # Too low: tools become useless. Too high: one big result is re-billed
     # on every loop iteration.
     assert 1_000 <= config.MAX_TOOL_OUTPUT_CHARS <= 100_000
+
+def test_model_name_has_a_pricing_entry():
+    # Switching MODEL_NAME without adding its price would break cost
+    # tracking. This catches that at test time.
+    assert config.MODEL_NAME in config.PRICING_USD_PER_1M
+
+
+def test_every_pricing_entry_is_complete():
+    needed = {"input", "cached_input", "output", "cache_write_multiplier"}
+    for model, prices in config.PRICING_USD_PER_1M.items():
+        assert needed <= set(prices), f"{model} is missing price fields"
+
+
+def test_usd_to_inr_is_in_a_plausible_range():
+    # Catches typos like 8.8 or 880.
+    assert 50 <= config.USD_TO_INR <= 200
+
+def test_run_cost_cap_is_positive_and_below_the_monthly_budget():
+    assert 0 < config.MAX_RUN_COST_INR <= config.MONTHLY_BUDGET_INR
