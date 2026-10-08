@@ -131,3 +131,23 @@ Every non-obvious decision, with the "why," recorded as it's made.
 
 - **Note:** `USD_TO_INR = 88.0` is an approximate rate, not a verified live rate. It affects only the rupee display, not the underlying USD math.
 
+## 2026-10-08: Tool Layer started, workspace jail (Piece 2a)
+
+- **Decision:** The agent's file tools are confined to one folder, `WORKSPACE_DIR` (`workspace/` inside the project). Every file tool must call `safe_path()` before touching disk.
+- **Why:** The model chooses the path, but our code touches the disk with our Windows account's permissions. A wrong guess or a prompt injection hidden in a file could otherwise reach `.env` (API key) or overwrite our own code. Chosen over "whole project" for least privilege.
+
+- **Decision:** `safe_path` judges the resolved destination (`resolve()` then `is_relative_to(root)`), not the spelling of the path.
+- **Why:** Blocking ".." as a string would reject legit `sub/../a.txt` and miss absolute paths (`C:\...`, which discard the root when joined) and symlinks. Verified by tests: traversal blocked, absolute-outside blocked, absolute-inside allowed, `sub/../a.txt` allowed, and the real workspace cannot reach `../.env`.
+
+- **Decision:** Violations raise `PermissionError` or `ValueError`; they are never caught inside the jail. `run_tool_call` already turns them into an `"Error: ..."` output for the model.
+
+- **Decision:** Writing skills (needed for GROW) will go through a separate, narrow `save_skill` tool later, not by widening write access to the project.
+- **Why:** Least privilege.
+
+- **Limits we accept (V1):** this is a path check, NOT a sandbox (no process isolation; containers are in the backlog). A symlink created between validation and use could bypass it (TOCTOU), acceptable for a single-user local agent.
+
+- **Open item:** the symlink-escape test was SKIPPED on this machine (Windows account cannot create symlinks), so that protection is verified only by theory (`resolve()` follows symlinks). Re-run with symlink permission (for example Windows Developer Mode) when convenient.
+- **Open item:** Windows-specific path quirks (case-insensitivity, trailing dots or spaces in names) are not tested. They are covered only because we check the resolved path, not the name.
+- **Open item:** verify against OpenAI's official docs whether strict mode works with parallel tool calls (two third-party sources contradict each other) before writing the tool schemas.
+- **Cost note:** tool definitions are sent as input tokens on every call, so V1 keeps to 3 tools with tight descriptions.
+

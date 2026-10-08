@@ -67,3 +67,9 @@ def test_usd_to_inr_is_in_a_plausible_range():
 
 def test_run_cost_cap_is_positive_and_below_the_monthly_budget():
     assert 0 < config.MAX_RUN_COST_INR <= config.MONTHLY_BUDGET_INR
+
+def test_workspace_is_strictly_inside_the_project_not_the_project_itself():
+    # If the workspace were the project root, the agent could read .env.
+    assert config.PROJECT_ROOT in config.WORKSPACE_DIR.parents
+
+    

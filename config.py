@@ -89,3 +89,8 @@ USD_TO_INR = 88.0
 # one rupee, so this only fires when something goes wrong (for example the
 # model keeps asking for tools while the history keeps growing).
 MAX_RUN_COST_INR = 15
+
+# The ONLY folder the agent's file tools may touch. It lives inside the
+# project but is separate from it, so the agent can never reach .env or our
+# own code. If this ever equals PROJECT_ROOT, the jail is worthless.
+WORKSPACE_DIR = PROJECT_ROOT / "workspace"
