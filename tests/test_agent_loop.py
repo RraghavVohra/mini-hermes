@@ -409,3 +409,71 @@ def test_history_has_no_open_calls_after_every_stop_reason():
         )
         assert result.stop_reason == expected_reason
         assert open_call_ids(result.history) == set(), expected_reason
+
+
+# --- on_event: the display hook (CLI prep) ---
+# Story: the loop only ANNOUNCES what happens; the caller decides how to
+# show it. These tests record the announcements instead of printing them.
+
+def test_on_event_announces_each_tool_call_then_its_result():
+    client = FakeClient([
+        reply([call_item()]),
+        reply([FakeItem("message")], text="391"),
+    ])
+    events = []
+    agent_loop.run_agent(
+        client, "17 x 23?", TOOLS, REGISTRY,
+        on_event=lambda kind, data: events.append((kind, data)),
+    )
+    assert events == [
+        ("tool_call", {"name": "multiply", "arguments": '{"a":17,"b":23}'}),
+        ("tool_result", {"name": "multiply", "output": "391"}),
+    ]
+
+
+def test_on_event_also_reports_a_failed_tool_with_its_error():
+    # A tool that fails must still be visible on screen, not just in history.
+    client = FakeClient([
+        reply([call_item(name="nope")]),
+        reply([FakeItem("message")], text="recovered"),
+    ])
+    events = []
+    agent_loop.run_agent(
+        client, "go", TOOLS, REGISTRY,
+        on_event=lambda kind, data: events.append((kind, data)),
+    )
+    assert [kind for kind, _ in events] == ["tool_call", "tool_result"]
+    assert events[1][1]["output"].startswith("Error:")
+
+
+def test_on_event_stays_silent_when_the_model_uses_no_tools():
+    client = FakeClient([reply([FakeItem("message")], text="hi")])
+    events = []
+    agent_loop.run_agent(
+        client, "hello", TOOLS, REGISTRY,
+        on_event=lambda kind, data: events.append((kind, data)),
+    )
+    assert events == []
+
+
+def test_a_crashing_on_event_cannot_break_the_run_or_the_history():
+    # Why this matters: if the display code crashed between a function_call
+    # and its output, the history would hold an unanswered call and the NEXT
+    # turn's request would be invalid. Two parallel calls make that gap real.
+    def broken_display(kind, data):
+        raise RuntimeError("display bug")
+
+    client = FakeClient([
+        reply([call_item("c1"), call_item("c2")]),
+        reply([FakeItem("message")], text="done"),
+    ])
+    result = agent_loop.run_agent(
+        client, "go", TOOLS, REGISTRY, on_event=broken_display
+    )
+    assert result.stop_reason == "completed"
+    assert result.final_text == "done"
+    assert open_call_ids(result.history) == set()
+    outputs = [i for i in result.history if i.get("type") == "function_call_output"]
+    assert [o["call_id"] for o in outputs] == ["c1", "c2"]
+    assert all(o["output"] == "391" for o in outputs)  # both tools really ran
+

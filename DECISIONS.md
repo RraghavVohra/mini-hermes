@@ -231,3 +231,12 @@ Every non-obvious decision, with the "why," recorded as it's made.
 - **Lesson:** a single sample with no baseline shows a signal, not proof. Do not credit the prompt for behaviors the model may show anyway.
 - **Observation:** when quoting a file the model changed the Hindi full stop (the danda, `।`) to a period. The file on disk was untouched. Do not treat the model's quote as a faithful copy of the file.
 - **Cost:** all four runs together cost $0.000706 (about Rs 0.062).
+
+## 2026-10-11: run_agent announces events through an optional on_event hook (agent_loop.py)
+
+- **Decision:** `run_agent` takes an optional `on_event(kind, data)` callback. It is called with `"tool_call"` (name, raw arguments) just before a tool runs, and `"tool_result"` (name, output) just after. It defaults to `None`, so old callers and tests are unchanged.
+- **Why:** the CLI must show tool calls live, but the loop should not print. The loop announces and the caller decides how to display, so tests and later components stay silent.
+- **Why errors are swallowed:** a display crash between a `function_call` and its output would leave an unanswered call in history, and the next turn's request would be invalid. The run matters more than the screen.
+- **Trade-off:** display bugs are hidden. The CLI tests must check the display code on their own.
+- **Raw arguments:** the hook gets the raw `arguments` string, not a parsed dict, because parsing can fail and the display should not depend on it.
+- **Tests:** 4 new tests (order and data, failed tool, no tools, crashing callback). Suite: 138 passed, 1 skipped.
