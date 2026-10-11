@@ -72,4 +72,15 @@ def test_workspace_is_strictly_inside_the_project_not_the_project_itself():
     # If the workspace were the project root, the agent could read .env.
     assert config.PROJECT_ROOT in config.WORKSPACE_DIR.parents
 
-    
+def test_read_default_max_lines_is_sane():
+    assert 1 <= config.READ_DEFAULT_MAX_LINES <= 2_000
+
+
+def test_max_read_file_bytes_is_sane():
+    assert 10_000 <= config.MAX_READ_FILE_BYTES <= 50_000_000   
+
+def test_max_write_chars_is_in_a_safe_range():
+    assert 1_000 <= config.MAX_WRITE_CHARS <= 100_000
+
+def test_max_list_entries_is_in_a_safe_range():
+    assert 10 <= config.MAX_LIST_ENTRIES <= 1_000

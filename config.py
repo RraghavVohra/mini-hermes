@@ -94,3 +94,21 @@ MAX_RUN_COST_INR = 15
 # project but is separate from it, so the agent can never reach .env or our
 # own code. If this ever equals PROJECT_ROOT, the jail is worthless.
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
+
+# Default page size for read_file. Paging keeps one read from flooding the
+# context (every tool result is re-billed on later iterations). A starting
+# value: tune it after we see real runs.
+READ_DEFAULT_MAX_LINES = 200
+
+# Largest file read_file will open at all. Without this, a huge file would
+# be loaded into memory just to show 200 lines of it.
+MAX_READ_FILE_BYTES = 2_000_000
+
+# Largest text write_file will accept. The content also sits inside the
+# function_call in history, so it is re-billed as input on every later
+# loop iteration. A big write costs twice. Roughly 5,000 tokens.
+MAX_WRITE_CHARS = 20_000
+
+# Most entries list_dir will show at once. Bigger folders are cut with a note
+# telling the model to narrow down, so a huge folder cannot flood the context.
+MAX_LIST_ENTRIES = 200

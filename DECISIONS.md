@@ -151,3 +151,33 @@ Every non-obvious decision, with the "why," recorded as it's made.
 - **Open item:** verify against OpenAI's official docs whether strict mode works with parallel tool calls (two third-party sources contradict each other) before writing the tool schemas.
 - **Cost note:** tool definitions are sent as input tokens on every call, so V1 keeps to 3 tools with tight descriptions.
 
+## 2026-10-11: Tool Layer built (registry, read_file, write_file, list_dir)
+
+- **Decision:** All tools register through `ToolRegistry` (`tools/registry.py`), which checks the schema against the function at registration time and produces both the API `definitions()` and the loop's `functions()` dict.
+- **Why:** In Experiment 02 the schema and the function lived in separate places, so a renamed argument in one would only fail on a paid API call. The registry catches the mismatch for free. It also rejects schemas that break strict-mode rules (`additionalProperties: false`, every property required, every parameter described). V1 allows only simple parameter types (no nested objects or arrays).
+
+- **Decision:** `strict: True` is set explicitly on every tool; optional arguments are nullable types like `["integer", "null"]`.
+- **Why:** If `strict` is omitted, the Responses API may silently fall back to non-strict. The official function-calling docs recommend always enabling strict. The earlier worry about strict plus parallel calls was checked against the official page: it states no such incompatibility for standard models (only a caveat for fine-tuned models). To confirm with a real parallel-call run in Piece 2d.
+
+- **Decision:** Tool errors are written for the model: they say what went wrong and name the next tool to try (for example "Use list_dir to see what exists", "Call read_file to review it, then write again with overwrite set to true").
+- **Why:** Anthropic's tool-writing guide recommends actionable errors and steering truncation messages over opaque codes. Our run_tool_call already turns every exception into an "Error: ..." output, so the message is what the model sees.
+
+- **Decision:** `read_file` pages by lines (`start_line`, `max_lines`, default 200) and also by a character budget (`MAX_TOOL_OUTPUT_CHARS` minus a 300-character footer reserve). A footer tells the model exactly which `start_line` to call next. Files over `MAX_READ_FILE_BYTES` (2 MB) are refused.
+- **Why:** Every tool result is replayed and re-billed on each later loop iteration. The page plus footer always fits under the cap, so run_tool_call's blunt truncation never fires. 200 lines is a starting value to tune after real runs (one terminal-agent paper uses 2000 as its default, but our replay cost argues for smaller).
+
+- **Decision:** `write_file` writes atomically (temp file in the same folder, then `os.replace`), uses explicit UTF-8 with `\n` newlines, creates missing folders, and caps content at `MAX_WRITE_CHARS` (20,000).
+- **Why:** A failure halfway through a direct write can corrupt the file. With a temp file the old file survives (verified by test: original intact, no temp files left behind). Windows text mode would otherwise turn `\n` into `\r\n`. A large write is billed twice: as output, then as input on every later iteration, because the content sits in the function_call in history.
+
+- **Decision:** `write_file` takes a required boolean `overwrite`. With `overwrite=false` an existing file is never replaced, and the error steers the model to `read_file` first.
+- **Why:** This is our own design choice, not from the docs. It stops the model from destroying saved work without deciding to. GROW needs updates, so overwriting stays possible, but deliberately.
+
+- **Decision:** `list_dir` lists one level only (no recursion), folders first with a trailing slash, files with their size in bytes, capped by `MAX_LIST_ENTRIES` (200) and the same character budget. A workspace folder that does not exist yet reads as empty, and listing never creates it.
+- **Why:** Recursive listings can be huge. Sizes let the model avoid reading a big file in full. Listing is for looking, not for creating folders.
+
+- **Decision:** `workspace/` is in `.gitignore`.
+- **Why:** The agent writes files there. They should never be committed by accident.
+
+- **Limits we accept (V1):** no `fsync` (power-loss durability is not needed for a local single-user learning agent). The atomicity of `os.replace` on Windows is documented inconsistently across sources, so the guarantee we rely on is only this: if our write fails before the swap, the old file is intact. On Windows `os.replace` fails when the target is open in another program, so that error gets its own message.
+- **Open item:** `list_dir` calls `is_dir()` and `stat()` on each child, and both follow symlinks, so a symlink inside the workspace pointing outside would show the type and size of its target (no content is exposed). The agent has no tool that creates symlinks, so this is low risk for now. Related to the earlier open item: the symlink-escape test is still SKIPPED on this machine.
+- **Open item:** the real tools have not yet been run against the real model. Piece 2d does that, including an attack run asking for `../.env`.
+
