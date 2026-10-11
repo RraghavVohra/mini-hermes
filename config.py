@@ -33,11 +33,10 @@ OPENAI_API_KEY = require_env("OPENAI_API_KEY")
 PROJECT_ROOT = Path(__file__).resolve().parent
 SKILLS_DIR = PROJECT_ROOT / "skills"
 
-# --- Model ---
-# Dev default: gpt-5.6-luna, chosen for best quality per rupee on agent
-# tasks. Heavier stages (e.g. skill creation) can get a stronger model
-# later; that is why the model lives here, in one place.
-MODEL_NAME = "gpt-5.6-luna"
+# Switched from "gpt-5.6-luna" after the official model pages showed gpt-6-luna
+# at about half the input price and 42% of the output price. To roll back,
+# set this to "gpt-5.6-luna" (its pricing entry is kept above).
+MODEL_NAME = "gpt-6-luna"
 
 # --- Loop limits ---
 # Stop condition #2 of the agent loop: a safety net against runaway
@@ -67,16 +66,22 @@ MAX_OUTPUT_TOKENS = 25_000
 # result gets re-billed again and again. Cap it. Roughly 2,500 tokens.
 MAX_TOOL_OUTPUT_CHARS = 10_000
 
-# --- Pricing (USD per 1M tokens) ---
-# One entry per model we use. Source: the official gpt-5.6-luna model page.
-# Update this when OpenAI changes prices or when we switch models. A test
-# makes sure MODEL_NAME always has an entry here.
+
+# One entry per model we use. Sources: the official model pages
+# (gpt-5.6-luna and gpt-6-luna). Update this when OpenAI changes prices or
+# when we switch models. A test makes sure MODEL_NAME always has an entry here.
 PRICING_USD_PER_1M = {
     "gpt-5.6-luna": {
         "input": 0.20,
         "cached_input": 0.02,
         "output": 1.20,
         # GPT-5.6 bills cache writes at 1.25x the normal input rate.
+        "cache_write_multiplier": 1.25,
+    },
+    "gpt-6-luna": {
+        "input": 0.10,
+        "cached_input": 0.01,
+        "output": 0.50,
         "cache_write_multiplier": 1.25,
     },
 }

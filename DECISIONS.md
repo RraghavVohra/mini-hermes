@@ -195,3 +195,22 @@ Every non-obvious decision, with the "why," recorded as it's made.
 - **Closed:** the open item on strict mode with parallel calls.
 - **Still open:** the symlink-escape test is skipped on this machine (Windows account cannot create symlinks); `list_dir` follows symlinks when reading type and size.
 
+## 2026-10-11: Model switched to gpt-6-luna; run_agent made multi-turn ready
+
+- **Decision:** `MODEL_NAME` is now `gpt-6-luna` (was `gpt-5.6-luna`). The pricing entry for `gpt-5.6-luna` stays in `config.py`, so rollback is one line.
+- **Why:** Official model pages: gpt-6-luna costs $0.10 input, $0.01 cached input, $0.125 cache write, $0.50 output per 1M tokens, against $0.20, $0.02, 1.25x input and $1.20 for gpt-5.6-luna. It was missed in the first model research because that research used a third-party aggregator that listed only the GPT-5.6 family. Availability on our key was confirmed with `models.retrieve`. Same Responses API rule: function calling with reasoning needs Responses.
+- **Verified (Experiment 04, same three runs on both models):** total $0.000401 on gpt-6-luna against $0.001092 on gpt-5.6-luna, about 63% lower. Behavior held: normal job passed (write, read and list, with `read_file` and `list_dir` sent back to back under strict mode, Hindi round trip intact), the hidden instruction in the file was ignored, and the API key never appeared.
+- **Observation:** in the direct attack (run B) gpt-6-luna refused on its own without calling the tool, so run B no longer exercises the jail. Run D was added: it asks for `../README.md`, a path that does not look like a secret. The model called `read_file`, the jail returned "Path is outside the workspace", and the model told the user. The jail is now verified on gpt-6-luna.
+- **Lesson:** re-run `exp04_real_tools.py` after any model change, and keep at least one attack case that the model's own refusal will not hide.
+
+- **Decision:** `run_agent` takes `instructions` (the system prompt) and sends it on EVERY call. When it is None, no `instructions` key is sent.
+- **Why:** OpenAI's docs say `instructions` applies only to the request it is sent with. We replay history ourselves (`store=False`), so earlier prompts are not carried over.
+
+- **Decision:** `run_agent` takes `history` to continue an earlier conversation. It copies the list and never changes the caller's list.
+
+- **Decision:** history must stay valid after every stop reason. On `run_budget`, every function_call that will not run gets an output saying "Not run: ...". On `incomplete`, the cut-off reply's items are dropped from history.
+- **Why:** a multi-turn CLI replays history on the next turn, and a function_call without an output would very likely make that request invalid. Not triggered yet, found by reasoning ahead of the CLI. The fix is safe either way. A test checks that no stop reason (completed, max_iterations, incomplete, run_budget) leaves an open call.
+- **Test change:** `test_run_agent_stops_on_run_budget_before_running_tools` used to assert there were no function_call_output items. It now asserts that every output starts with "Not run" and that the real result (391) is absent. The intent (the tool did not run) is unchanged.
+
+- **Research for the system prompt (GPT-5.6 guidance; to be validated on gpt-6-luna):** keep the prompt lean and state each rule once; define autonomy and approval boundaries in one compact policy; avoid broad "Be concise" instructions; `text.verbosity` exists as a default-detail setting; the prompt must be static (no untrusted text interpolated).
+- **Open items:** the GPT-6 prompting guidance was written for Astra, so evaluate it on Luna. The default for `reasoning.context` on gpt-6-luna was not checked (our replay of every output item works either way). Explicit prompt caching is not used yet; watch `cached_tokens` and `cache_write_tokens` in real multi-turn sessions, because cache writes cost 1.25x. The symlink test is still skipped. There is no system prompt yet.

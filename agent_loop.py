@@ -102,7 +102,8 @@ class AgentResult:
 
 
 def run_agent(client, user_message, tools, registry,
-              max_iterations=None, max_cost_inr=None) -> AgentResult:
+              max_iterations=None, max_cost_inr=None,
+              instructions=None, history=None) -> AgentResult:
     """The Core Agent Loop.
 
     Story: send history -> read the reply -> if the model asked for tools,
@@ -111,6 +112,9 @@ def run_agent(client, user_message, tools, registry,
 
     `client` is passed in (not created here) so tests can hand in a fake
     one that replays scripted replies for free.
+
+    `instructions` is the system prompt. `history` is the history from an
+    earlier result, to continue that conversation.
     """
     if max_iterations is None:
         max_iterations = config.MAX_ITERATIONS
@@ -118,8 +122,11 @@ def run_agent(client, user_message, tools, registry,
         max_cost_inr = config.MAX_RUN_COST_INR
     max_cost_usd = max_cost_inr / config.USD_TO_INR
 
-    # We own the history (store=False), so the whole conversation lives here.
-    history = [{"role": "user", "content": user_message}]
+    # We own the history (store=False). To continue a conversation, the
+    # caller hands back the history from the last result. We copy it, so the
+    # caller's list is never changed behind its back.
+    history = list(history) if history else []
+    history.append({"role": "user", "content": user_message})
     cost_usd = 0.0
     tokens = cost.empty_totals()
 
@@ -128,14 +135,19 @@ def run_agent(client, user_message, tools, registry,
 
     # A bounded for-loop: a bug cannot turn into an infinite, billed loop.
     for iteration in range(1, max_iterations + 1):
-        response = client.responses.create(
-            model=config.MODEL_NAME,
-            reasoning={"effort": config.REASONING_EFFORT},
-            max_output_tokens=config.MAX_OUTPUT_TOKENS,
-            store=False,
-            input=history,
-            tools=tools,
-        )
+        request = {
+            "model": config.MODEL_NAME,
+            "reasoning": {"effort": config.REASONING_EFFORT},
+            "max_output_tokens": config.MAX_OUTPUT_TOKENS,
+            "store": False,
+            "input": history,
+            "tools": tools,
+        }
+        # The docs say `instructions` applies only to the request it is sent
+        # with. We replay history ourselves, so it must go on EVERY call.
+        if instructions is not None:
+            request["instructions"] = instructions
+        response = client.responses.create(**request)
 
         # Pay first, judge later: record what this call cost before any
         # decision, because the money is spent even if the reply is unusable.
@@ -145,10 +157,15 @@ def run_agent(client, user_message, tools, registry,
         # Replay EVERY output item (reasoning, messages, function calls).
         # The docs say reasoning items must go back so the model keeps its
         # thread, and we cannot predict which items a reply will contain.
+        before = len(history)
         history.extend(to_input_item(item) for item in response.output)
 
         # Stop reason 1: the token cap was hit (possibly mid-reasoning).
         if response.status == "incomplete":
+            # A cut-off reply can hold a half-written function_call that can
+            # never be answered, and that would break the NEXT turn of a
+            # conversation. Drop this reply's items so history stays valid.
+            del history[before:]
             return finish(response.output_text, "incomplete", iteration)
 
         # Stop reason 2: no tool requested, so this reply is the answer.
@@ -160,6 +177,15 @@ def run_agent(client, user_message, tools, registry,
         # so a finished answer always wins, and BEFORE running tools so we
         # do not do more work on a run we are about to stop.
         if cost_usd >= max_cost_usd:
+            # These calls will never run, but every function_call needs an
+            # output, or the next request (the next turn) is invalid. So we
+            # answer each one explicitly.
+            for call in calls:
+                history.append({
+                    "type": "function_call_output",
+                    "call_id": call.call_id,
+                    "output": "Not run: this task reached its cost limit and was stopped.",
+                })
             return finish("", "run_budget", iteration)
 
         # Run every requested tool (the model may ask for several at once).
@@ -168,4 +194,5 @@ def run_agent(client, user_message, tools, registry,
             history.append(run_tool_call(call, registry))
 
     # Stop reason 4: still asking for tools after the last allowed iteration.
+    # History is already valid: every call above got its output.
     return finish("", "max_iterations", max_iterations)

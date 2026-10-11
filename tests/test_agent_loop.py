@@ -307,7 +307,11 @@ def test_run_agent_stops_on_run_budget_before_running_tools():
     result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY, max_cost_inr=0.001)
     assert result.stop_reason == "run_budget"
     assert len(client.requests) == 1  # it did not go round again
-    assert not any(i.get("type") == "function_call_output" for i in result.history)
+    # The tool must not have RUN. The history does hold "Not run" outputs now,
+    # because every function_call needs an answer for the next turn to be valid.
+    outputs = [i for i in result.history if i.get("type") == "function_call_output"]
+    assert outputs and all(o["output"].startswith("Not run") for o in outputs)
+    assert not any(o["output"] == "391" for o in outputs)  # 17 x 23 never ran
 
 
 def test_run_agent_finished_answer_wins_over_the_budget():
@@ -321,3 +325,87 @@ def test_run_agent_counts_the_cost_of_incomplete_responses():
     result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY)
     assert result.stop_reason == "incomplete"
     assert result.cost_usd > 0
+
+# --- instructions, continuing a conversation, and history that stays valid ---
+
+def open_call_ids(history):
+    """call_ids of function_calls that have no function_call_output yet."""
+    calls = {i["call_id"] for i in history if i.get("type") == "function_call"}
+    answered = {i["call_id"] for i in history if i.get("type") == "function_call_output"}
+    return calls - answered
+
+
+def test_run_agent_sends_instructions_on_every_call():
+    # `instructions` applies only to the request it is sent with, so the
+    # second call needs it too, not just the first.
+    client = FakeClient([
+        reply([call_item()]),
+        reply([FakeItem("message")], text="done"),
+    ])
+    agent_loop.run_agent(client, "go", TOOLS, REGISTRY, instructions="BE CAREFUL")
+    assert len(client.requests) == 2
+    assert all(r["instructions"] == "BE CAREFUL" for r in client.requests)
+
+
+def test_run_agent_sends_no_instructions_key_when_none_given():
+    client = FakeClient([reply([FakeItem("message")], text="ok")])
+    agent_loop.run_agent(client, "go", TOOLS, REGISTRY)
+    assert "instructions" not in client.requests[0]
+
+
+def test_run_agent_continues_an_earlier_conversation():
+    first_client = FakeClient([reply([FakeItem("message")], text="hi")])
+    first = agent_loop.run_agent(first_client, "hello", TOOLS, REGISTRY)
+
+    second_client = FakeClient([reply([FakeItem("message")], text="again")])
+    agent_loop.run_agent(
+        second_client, "next question", TOOLS, REGISTRY, history=first.history
+    )
+    sent = second_client.requests[0]["input"]
+    assert sent[: len(first.history)] == first.history  # the old turn comes first
+    assert sent[-1] == {"role": "user", "content": "next question"}
+
+
+def test_run_agent_does_not_modify_the_history_it_was_given():
+    given = [{"role": "user", "content": "earlier"}]
+    client = FakeClient([reply([FakeItem("message")], text="ok")])
+    agent_loop.run_agent(client, "now", TOOLS, REGISTRY, history=given)
+    assert given == [{"role": "user", "content": "earlier"}]
+
+
+def test_run_budget_stop_answers_every_open_call():
+    client = FakeClient([reply([call_item("c1"), call_item("c2")])])
+    result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY, max_cost_inr=0.001)
+    assert result.stop_reason == "run_budget"
+    outputs = [i for i in result.history if i.get("type") == "function_call_output"]
+    assert [o["call_id"] for o in outputs] == ["c1", "c2"]
+    assert all(o["output"].startswith("Not run") for o in outputs)
+
+
+def test_incomplete_reply_is_dropped_from_history():
+    client = FakeClient([reply([call_item("c9")], status="incomplete")])
+    result = agent_loop.run_agent(client, "go", TOOLS, REGISTRY)
+    assert result.stop_reason == "incomplete"
+    # Only the user message remains: no half-written function_call.
+    assert result.history == [{"role": "user", "content": "go"}]
+
+
+def test_history_has_no_open_calls_after_every_stop_reason():
+    # Why this matters: the next turn replays this history, and a
+    # function_call without an output would make that request invalid.
+    scenarios = {
+        "completed": (
+            [reply([call_item()]), reply([FakeItem("message")], text="x")], {}),
+        "max_iterations": (
+            [reply([call_item()]), reply([call_item()])], {"max_iterations": 2}),
+        "incomplete": (
+            [reply([call_item("c9")], status="incomplete")], {}),
+        "run_budget": (
+            [reply([call_item()])], {"max_cost_inr": 0.001}),
+    }
+    for expected_reason, (replies, options) in scenarios.items():
+        result = agent_loop.run_agent(
+            FakeClient(replies), "go", TOOLS, REGISTRY, **options
+        )
+        assert result.stop_reason == expected_reason
+        assert open_call_ids(result.history) == set(), expected_reason
