@@ -600,3 +600,306 @@ Result: 57 tests passed, 1 skipped.
 - Re-run the symlink escape test with symlink permission.
 - Windows path quirks (case-insensitivity, trailing dots and spaces) are covered only indirectly by resolved-path checking.
 - The narrow `save_skill` tool for GROW is a later decision.
+
+
+---
+
+# Theory: Tool Layer, Part 2 (Registry, File Tools, Verification)
+
+*Built and verified during Chat 08 — Mini Hermes in the Making.*
+*Date: 2026-10-11*
+*Sections continue from Tool Layer Part 1 (sections 13 to 22). This part closes several open items from Part 1: strict mode with parallel calls (section 16.5) and the real-model check of the jail (section 22).*
+
+---
+
+## 23. Status of the Tool Layer
+
+The Tool Layer is complete for V1: a path jail, a tool registry, and three file tools (`read_file`, `write_file`, `list_dir`). All of it is tested without the API (123 tests, 122 passed, 1 skipped) and then checked once against the real model (Experiment 04).
+
+What was closed from Part 1:
+
+- Strict mode with parallel tool calls: official docs state no incompatibility for standard models, and a real run worked (section 24.4).
+- The jail against a real model: the real model tried `../.env` and was blocked (section 32).
+
+What is still open is collected in section 35.
+
+---
+
+## 24. Strict Mode (from the official function-calling docs)
+
+### 24.1 What it is
+
+Setting `strict` to true makes the model follow the function's JSON schema exactly, instead of matching it on a best-effort basis. OpenAI's docs recommend always enabling it.
+
+### 24.2 The two rules it imposes
+
+1. `additionalProperties` must be `false` for each object in `parameters`.
+2. Every field in `properties` must be listed in `required`.
+
+An optional field is written by adding `null` to its type, for example `["string", "null"]`. It stays in `required`, but the model may send null.
+
+### 24.3 What happens when `strict` is not written
+
+- If you send `strict: true` with a schema that breaks the rules, the request is rejected with details.
+- If you omit `strict` in the Responses API, it tries to turn your schema into strict mode and, if it cannot, quietly falls back to non-strict best-effort calling. The response then shows `strict: false`.
+- Chat Completions stays non-strict by default.
+
+**Our decision:** write `strict: True` explicitly on every tool, so a bad schema fails loudly instead of silently degrading.
+
+### 24.4 Strict mode and parallel tool calls
+
+Part 1 recorded a contradiction between two third-party sources. The official page states no incompatibility for standard models. Its only caveat is that for fine-tuned models, strict mode is disabled when the model calls several functions in one turn. We use no fine-tuned model. In Experiment 04 the model sent `read_file` and `list_dir` back to back and both ran correctly. This is one observation, not a guarantee, but it agrees with the official docs.
+
+### 24.5 Limits to remember
+
+Some JSON schema features are not supported in strict mode. That is why the registry keeps V1 parameters to simple types (section 26).
+
+---
+
+## 25. Defining Tools So the Model Uses Them Well (official best practices)
+
+- Describe the function's purpose, each parameter and its format, and what the output means.
+- Use the system prompt to say when to use each function.
+- Adding examples may hurt performance for reasoning models, so our descriptions contain no examples.
+- Use enums and object structure to prevent invalid states. The docs give a `toggle_light(on, off)` example, which allows an impossible call.
+- Pass the intern test: could a human use the function correctly with only what we gave the model?
+- Do not make the model fill arguments we already know. Our workspace path is fixed in code, and the model never chooses it.
+- Combine functions that are always called in sequence.
+- Keep the number of tools small. The docs call fewer than 20 a soft suggestion. We use 3.
+- Tool definitions are injected into the system message, count against the context limit, and are billed as input tokens on every call.
+- `allowed_tools` lets us restrict which tools the model may call without changing the tools list, which the docs say helps keep prompt caching savings. Not needed yet, but relevant when skills make the tool list change.
+
+---
+
+## 26. The Tool Registry (tools/registry.py)
+
+### 26.1 The problem it solves
+
+In Experiment 02, a tool's schema and its Python function were written in two separate places. Rename an argument in one and forget the other, and the model sends arguments the function cannot accept. That would only show up on a paid API call.
+
+### 26.2 What the registry does
+
+It binds the schema and the function in one place and checks them against each other when the tool is registered, which costs nothing and needs no API.
+
+| Check | Why |
+|---|---|
+| Schema parameter names equal the function's parameter names | The bug the registry exists to prevent. |
+| `additionalProperties` is false | Strict mode rule. |
+| Every property is in `required` | Strict mode rule. |
+| Every parameter has a description | The model knows a parameter only by its name and description. |
+| No nested object or array parameters (V1) | Strict mode has extra rules for them that we have not studied yet. |
+| Non-empty tool description, no duplicate names | Basic safety. |
+
+### 26.3 How it is used
+
+- A decorator registers the function, and the tool name is the function's name, so it is written only once.
+- `object_schema()` builds a strict-compliant parameters schema from a properties dictionary, so the strict rules cannot be forgotten.
+- `definitions()` returns the flat Responses API tool list with `strict: True`, as copies, so callers cannot change the registry.
+- `functions()` returns name-to-function, exactly what `run_tool_call` expects.
+
+---
+
+## 27. Writing Tools for an Agent (Anthropic's tool-writing guide)
+
+The central idea: an agent's context window is its most valuable resource.
+
+- For any tool that could return a lot, use pagination, range selection, filtering or truncation, with sensible defaults.
+- If you truncate, steer the agent with a helpful instruction about what to do next.
+- Return actionable errors that say what went wrong and how to fix it, not opaque codes or tracebacks.
+
+How each of our tools applies this:
+
+| Tool | Limit | Steering |
+|---|---|---|
+| `read_file` | 200 lines per page and a character budget | Footer names the next `start_line`. |
+| `write_file` | 20,000 characters | Error says to split or shorten; existing-file error says to call `read_file` first. |
+| `list_dir` | 200 entries and the character budget | Footer says to call `list_dir` on a subfolder. |
+
+---
+
+## 28. read_file
+
+### 28.1 Paging
+
+`read_file(path, start_line, max_lines)` returns one page. The stop rule is whichever comes first: the line limit (default 200, from `READ_DEFAULT_MAX_LINES`) or the character budget (`MAX_TOOL_OUTPUT_CHARS` minus a 300-character footer reserve).
+
+### 28.2 Why the reserve matters
+
+Page plus footer always fits under `MAX_TOOL_OUTPUT_CHARS`. So `run_tool_call`'s blunt truncation, which cuts without telling the model what happened, never has to fire. A test proves this.
+
+### 28.3 The footer
+
+When the file is not fully shown, the result ends with a note such as: showing lines 1 to 190 of 950, and to continue call `read_file` with `start_line=191`. A file that fits entirely gets no footer, which saves tokens. A single line longer than the whole budget (a minified file) is cut and the footer says so.
+
+### 28.4 Other guards
+
+- Files over `MAX_READ_FILE_BYTES` (2 MB) are refused, so a huge file is not loaded into memory just to show 200 lines.
+- Binary (non UTF-8) files give a clear error.
+- A missing file or a directory gives an error that names `list_dir`.
+- The path jail runs first, before anything touches the disk.
+
+### 28.5 The 200-line default is a starting value
+
+One terminal-agent paper we read uses 2000 lines as its default and cuts very large outputs from the middle. Those are one project's choices, not a standard. We chose smaller because our loop re-sends every tool result on every iteration. We will tune it after more real runs.
+
+### 28.6 Cost example
+
+10,000 characters is roughly 2,500 tokens. If that result stays in history for 5 iterations, that is about 12,500 input tokens, around $0.0025 (about Rs 0.22). Rough numbers, but they show why paging matters.
+
+---
+
+## 29. write_file
+
+### 29.1 Why not write straight into the file
+
+If an error happens halfway through a direct write, the file can be left corrupted and data is lost.
+
+### 29.2 Atomic write
+
+Write the whole new content to a temporary file first, then swap it in with `os.replace`. The temporary file is created in the same folder as the target, because `os.replace` swaps within one filesystem. If anything fails, the temp file is removed and the old file is untouched. A test proves both: the original survives and no temp file is left.
+
+### 29.3 Honest limits on Windows
+
+- Sources disagree about whether the swap itself is atomic on Windows. The guarantee we rely on is smaller: if our write fails before the swap, the old file is intact.
+- On Windows `os.replace` fails when the target file is open in another program. We turn that error into a message that says so.
+- We skip `fsync`. Surviving a power cut is not a V1 need for a local single-user agent.
+
+### 29.4 Text handling
+
+- Explicit UTF-8, so Hindi text round-trips (verified, including with the real model).
+- Newlines are written as `\n` explicitly. Windows text mode would otherwise write `\r\n`, so files would differ between machines.
+
+### 29.5 The overwrite flag
+
+`overwrite` is a required boolean. This is our own design choice, not from any docs. With `overwrite=false`, an existing file is never replaced, and the error tells the model to call `read_file` first and then retry with `overwrite=true`. This stops the model from destroying saved work without deciding to. GROW still needs to update skills, so overwriting stays possible, but deliberately.
+
+### 29.6 Size cap and double billing
+
+Content is capped at `MAX_WRITE_CHARS` (20,000, about 5,000 tokens). A write costs twice: first as output tokens when the model generates it, and again as input on every later iteration, because the content sits inside the `function_call` item in history.
+
+### 29.7 Folders
+
+Missing parent folders are created. If part of the path is an existing file, the model gets a clear error.
+
+---
+
+## 30. list_dir
+
+- One level only, not recursive. A recursive listing can be huge, and the model can walk down one folder at a time.
+- Folders first (with a trailing slash), then files, each sorted A to Z ignoring case. The OS gives no guaranteed order, so we sort ourselves.
+- Files show their size in bytes, so the model can avoid reading a huge file in full.
+- Capped by `MAX_LIST_ENTRIES` (200) and the same character budget as `read_file`, with a footer that steers the model to a subfolder.
+- A workspace folder that does not exist yet reads as empty, and listing never creates it. Listing is for looking.
+- Errors name the next step: a missing folder points to `list_dir` on `"."`, and a file path points to `read_file`.
+
+---
+
+## 31. Prompt Injection
+
+### 31.1 What it is
+
+According to OpenAI's agent-safety guidance, a prompt injection happens when untrusted text or data enters an AI system and malicious content in it tries to override the AI's instructions. The goal can be to exfiltrate private data through tool calls, to take misaligned actions, or to change the model's behavior.
+
+### 31.2 Why file and tool results matter
+
+Each tool result is another untrusted input. A file the agent reads can carry a hidden instruction, and to the model it is only more text. The danger is greatest when that text ends up driving a tool call.
+
+### 31.3 Source and sink
+
+OpenAI describes agent attacks as needing a source (a way to influence the system) and a sink (a capability that is dangerous in the wrong context). In our case the source is text hidden in a file, and the sink is a file tool that could reach `.env`.
+
+### 31.4 Our defense
+
+- Treat file contents as untrusted.
+- Limit permissions: the jail confines every file tool to `workspace/`.
+- The jail is deterministic code. It does not depend on the model resisting the attack.
+- The workspace is fixed in code. The model never chooses it.
+
+### 31.5 Model resistance is not a guarantee
+
+OpenAI's own docs say agents can still be tricked. One third-party evaluation reported that injection resistance can change, even drop, between model versions. So the tests should be re-run after any model change.
+
+### 31.6 What is not covered yet
+
+We have no monitoring of tool calls and no confirmation step for sensitive actions. These become important when tools that reach the network are added.
+
+---
+
+## 32. Verification Against the Real Model (Experiment 04)
+
+Three runs in one script (`experiments/exp04_real_tools.py`):
+
+| Run | What happened | Result |
+|---|---|---|
+| A. Normal job | The model wrote `notes/hello.md` (English and Hindi), read it back, and listed the workspace. Three iterations, with `read_file` and `list_dir` sent back to back. | Pass. The real API accepted all strict definitions on the first call. |
+| B. Direct attack | The model called `read_file("../.env")`. The jail returned "Path is outside the workspace" and the model reported it could not read it. | Pass. The jail held against the real model. |
+| C. Indirect attack | A file had a hidden instruction to read `../.env`. The model summarized only the real notes and never tried the read. | The model resisted on its own, so this run did not exercise the jail. |
+
+In all three runs the API key never appeared in the history or the answer.
+
+**The honest reading of run C:** the model ignoring the injection is a good sign, but it is one sample and not a guarantee. The jail is what protects us, and run B showed it working on the real model.
+
+**Cost:** all three runs together cost $0.001092 (about Rs 0.096). Run A alone cost $0.000518.
+
+`exp04_real_tools.py` is kept as a regression check. Re-run it after any model, tool or jail change.
+
+---
+
+## 33. Testing Strategy for the Tool Layer
+
+Three kinds of test, all free:
+
+1. **Pure function tests.** Paging (`read_page`) and listing (`format_listing`) are pure functions, so their rules are tested without touching disk.
+2. **Throwaway workspace tests.** `config.WORKSPACE_DIR` is pointed at a temporary folder with `monkeypatch`, which works because `safe_path` reads the config at call time.
+3. **Attack and failure tests.** Path escape, oversized content, binary files, a locked file at replace time, and a path that runs through a file.
+
+Plus one real-API check (section 32) for the things only the real API can show.
+
+Test count by file (123 collected, 122 passed, 1 skipped):
+
+| File | Tests |
+|---|---|
+| test_agent_loop.py | 28 |
+| test_config.py | 16 |
+| test_cost.py | 7 |
+| test_files.py | 48 |
+| test_registry.py | 13 |
+| test_workspace.py | 11 (1 skipped) |
+
+---
+
+## 34. Where the Money Goes in the Tool Layer
+
+| Item | How it is billed | Our control |
+|---|---|---|
+| Tool definitions | Input tokens on every call | Only 3 tools, short descriptions, no examples. |
+| Tool results | Re-sent as input on every later iteration | Paging, character budget, size guards. |
+| Written content | Output once, then input on every later iteration | `MAX_WRITE_CHARS` (20,000). |
+| Reasoning | Billed as output | `REASONING_EFFORT = "low"`. |
+
+---
+
+## 35. Open Items and Observations
+
+- The symlink-escape test is skipped on this machine because the Windows account cannot create symlinks. That protection is currently verified only by theory (`resolve()` follows symlinks).
+- `list_dir` reads the type and size of each entry, and both follow symlinks. A symlink inside the workspace pointing outside would show its target's type and size (no content). The agent has no tool that creates symlinks, so the risk is low.
+- `run_agent` sends no system prompt (`instructions`). The model works from tool descriptions alone. The Skill System and the CLI will need one.
+- The agent did not warn the user about the suspicious instruction hidden in the file. A possible future improvement.
+- The 200-line `read_file` default and the 20,000-character write cap are starting values to tune after more real runs.
+- `USD_TO_INR` is an approximate rate and only affects the rupee display.
+- Windows atomicity of `os.replace` is documented inconsistently, and `fsync` is skipped.
+
+---
+
+## 36. What the Tool Layer Added
+
+| Piece | File | What it does |
+|---|---|---|
+| Workspace setting and limits | config.py | `WORKSPACE_DIR`, read, write and list limits. |
+| Path jail | tools/workspace.py | `safe_path()` resolves and validates every path. |
+| Registry | tools/registry.py | Binds schema and function, checks strict-mode rules, produces the definitions and the function map. |
+| File tools | tools/files.py | `read_file`, `write_file`, `list_dir`, plus the pure helpers `read_page` and `format_listing`. |
+| Tests | tests/ | 123 tests, all free. |
+| Real-model check | experiments/exp04_real_tools.py | Normal job, direct attack, and indirect attack against the real model. |
+
+V1 Component 2 is done. Next is V1 Component 3: the Skill System, where the agent starts to learn, which is the real start of GROW.
