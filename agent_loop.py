@@ -103,7 +103,8 @@ class AgentResult:
 
 def run_agent(client, user_message, tools, registry,
               max_iterations=None, max_cost_inr=None,
-              instructions=None, history=None) -> AgentResult:
+              instructions=None, history=None,
+              on_event=None) -> AgentResult:
     """The Core Agent Loop.
 
     Story: send history -> read the reply -> if the model asked for tools,
@@ -115,6 +116,9 @@ def run_agent(client, user_message, tools, registry,
 
     `instructions` is the system prompt. `history` is the history from an
     earlier result, to continue that conversation.
+
+    `on_event(kind, data)` is an optional display hook. The loop calls it as
+    tools start and finish; it never reads anything back from it.
     """
     if max_iterations is None:
         max_iterations = config.MAX_ITERATIONS
@@ -129,6 +133,20 @@ def run_agent(client, user_message, tools, registry,
     history.append({"role": "user", "content": user_message})
     cost_usd = 0.0
     tokens = cost.empty_totals()
+
+    def emit(kind, **data):
+        """Tell the caller what is happening, for display only.
+
+        Why errors are swallowed: a display bug must not leave a
+        function_call without its output, because that makes the next
+        turn's history invalid. The loop's job is the run, not the screen.
+        """
+        if on_event is None:
+            return
+        try:
+            on_event(kind, data)
+        except Exception:
+            pass
 
     def finish(text, reason, iteration):
         return AgentResult(text, reason, iteration, history, cost_usd, tokens)
@@ -191,7 +209,11 @@ def run_agent(client, user_message, tools, registry,
         # Run every requested tool (the model may ask for several at once).
         # Errors become "Error: ..." outputs and the loop continues.
         for call in calls:
-            history.append(run_tool_call(call, registry))
+            # Announce BEFORE running, so a slow tool is visible live.
+            emit("tool_call", name=call.name, arguments=call.arguments)
+            output_item = run_tool_call(call, registry)
+            history.append(output_item)
+            emit("tool_result", name=call.name, output=output_item["output"])
 
     # Stop reason 4: still asking for tools after the last allowed iteration.
     # History is already valid: every call above got its output.
