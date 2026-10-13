@@ -240,3 +240,33 @@ Every non-obvious decision, with the "why," recorded as it's made.
 - **Trade-off:** display bugs are hidden. The CLI tests must check the display code on their own.
 - **Raw arguments:** the hook gets the raw `arguments` string, not a parsed dict, because parsing can fail and the display should not depend on it.
 - **Tests:** 4 new tests (order and data, failed tool, no tools, crashing callback). Suite: 138 passed, 1 skipped.
+
+## 2026-10-13: cli.py is a thin outer loop around run_agent
+
+- **Decision:** `cli.py` only reads a line, calls `run_agent` with the history it owns, shows the result, and repeats. No agent logic lives in it.
+- **Why:** `run_agent` is the inner loop for one user message. Keeping the outer loop thin means every later component (skills, nudge, memory) plugs into `run_agent` without touching the screen code.
+- **Plain `input()` and `print()`:** no new dependency. `prompt_toolkit` was skipped for V1 because nothing needs editing or multiline input yet.
+- **Commands:** only `/exit` and `/reset`. An unknown `/command` is never sent to the model, so a typo costs nothing.
+- **Failed turn leaves no trace:** `run_agent` copies the history it is given, so an API error or Ctrl+C leaves the last good history untouched.
+- **Testability:** `chat_loop` takes `read_line` and `say` as arguments, so a whole session is scripted in tests with no keyboard, screen, or API.
+- **Verified on Windows with the real model:** live `[tool]` and `[result]` lines, history carried across turns, `/reset` clears it, `/exot` is rejected, Ctrl+Z then Enter exits cleanly, Ctrl+C at the prompt exits cleanly.
+- **Not verified live:** Ctrl+C in the middle of a turn. It is covered by a unit test only.
+- **Known limits:**
+  - Money spent inside a turn that crashed is not counted in the session total.
+  - There is no session budget yet, and history grows every turn, so each turn costs more. Only the per-run cap (₹15) applies.
+  - The jail works with the real model: asked for `DECISIONS.md`, which sits outside the workspace, the agent reported it could not find it.
+- **Unverified (carried over):** whether a Hinglish question gets a Hinglish reply. One sample answered in English, a later one in Hinglish. This waits for the planned 5-runs-each comparison.
+- **Tests:** 22 new tests. Suite: 160 passed, 1 skipped.
+
+## 2026-10-13: Exp06 measured the cost curve and prompt caching on gpt-6-luna
+
+- **What was run:** 8 turns carrying history like cli.py does (6 plain answers of about 100 words, 2 tool turns). One sample, so a signal, not proof.
+- **Fixed overhead:** turn 1 sent 584 input tokens (system prompt, tool definitions, one question). Plain turns then add about 150 tokens of history each.
+- **Caching started where the docs say:** turn 4 sent 965 tokens and was not cached. Turn 5 sent 1,113, and 1,110 tokens were written to the cache. The first cache reads came on turn 6.
+- **Steady state:** from turn 6 on, 90 to 95 percent of input tokens were cache reads, and each turn wrote only its new tokens (62 to 217).
+- **Result:** the last turn cost 0.8x the first turn while sending 2.6x the input tokens. Total ₹0.0963 against ₹0.1332 with no caching (about 28% saved).
+- **Entry fee:** turn 5, the first write, was the most expensive plain turn, because the whole prompt was written at the higher write rate.
+- **Decision:** keep history strictly append-only. Do not trim, summarize or rewrite old turns without measuring total cost first.
+- **Rule for later components (from the docs, not yet tested here):** dynamic content such as retrieved memory, time, or per-request skill text goes AFTER the stable prefix as appended messages, never into the system prompt or the tool list.
+- **Known limits:** the docs say cache lifetime is at least 30 minutes. A longer pause probably means a new write, untested. `/reset` pays the entry fee again.
+- **Correction:** the earlier estimate of 500 tokens per turn was too high. Measured growth is about 150, which is roughly 3.5x over 20 turns, not 10x.
