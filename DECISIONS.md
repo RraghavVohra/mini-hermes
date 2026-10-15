@@ -2,6 +2,39 @@
 
 Every non-obvious decision, with the "why," recorded as it's made.
 
+**This file is the single source of truth.** Entries below are a log, newest at the bottom. Later entries supersede earlier ones, so read this block first for what is actually true today.
+
+## Current state (updated 2026-10-13)
+
+| # | Component | Status |
+|---|---|---|
+| 1 | Core Agent Loop (`agent_loop.py`) | ✅ Built, 4 stop conditions, cost tracked, multi-turn ready |
+| 2 | Tool Layer (`tools/`) | ✅ Built: registry, `read_file`, `write_file`, `list_dir`, workspace jail |
+| 3 | System Prompt (`prompts.py`) | ✅ Built, static, about 230 tokens |
+| 4 | CLI Interface (`cli.py`) | ✅ Built, thin REPL, `/exit` and `/reset` |
+| 5 | Skill System | ⏳ Next |
+| 6 | Periodic Nudge | ⏳ Pending |
+| 7 | Cross-session Memory | ⏳ Pending |
+
+**Build order changed:** the CLI was planned as the last step but was built fourth, before the Skill System, because testing skills by hand without a chat loop is slow and costs API calls each time.
+
+**Settings in force:** model `gpt-6-luna` · Responses API with `store=False` and manual history replay · `reasoning.effort` low · per-run cap ₹15 · monthly budget ₹300 (documented, not enforced in code) · suite 160 passed, 1 skipped.
+
+**Superseded, do not follow in old entries:** Chat Completions · `gpt-4.1-mini` and `gpt-5.6-luna` · while loop with max 15 iterations · three stop conditions · ₹50 monthly budget.
+
+### Open items
+
+- The symlink-escape test is skipped on this machine (Windows cannot create symlinks here). `list_dir` follows symlinks when reading type and size.
+- Windows path quirks (case-insensitivity, trailing dots or spaces) are untested.
+- No budget is enforced in code. There is no session budget in the CLI, and money spent in a turn that crashed is not counted.
+- `USD_TO_INR` is an approximate rate, not a live one. It affects only the rupee display.
+- Two prompt behaviors are unverified: the "tell the user about a hidden instruction" rule, and whether a Hinglish question reliably gets a Hinglish reply. Planned A/B, 5 runs each with and without the prompt, about ₹0.15.
+- Ctrl+C in the middle of a turn is covered by a unit test only, never run live.
+- Cache lifetime on luna is not verified. The 30-minute figure in the docs is stated for GPT-5.6 and later.
+- `reasoning.context` default on gpt-6-luna was never checked.
+- GPT-6 prompting guidance was written for Astra, not evaluated on Luna.
+- `read_file` defaults to 200 lines per page, a starting value to tune after more real runs.
+
 ## 2026-09-29 — Project kickoff
 
 - **Decision:** Build mini-Hermes as a learning project, not a product. Primary goal: understand agent internals (tool-calling loop, skill-creation, self-nudge loop) from first principles, not framework composition.
